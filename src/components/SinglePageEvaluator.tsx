@@ -17,101 +17,15 @@ import type {
   FeatureVector,
   PredictApiResponse,
   ZonePreset,
+  ProvinceCycleRecord,
 } from '../types/api.ts';
+
+import { buildCustomState, changeProvince, presetToFriendlyState, toApiPayload, useProvinceHistory, type FriendlyFormState } from './evaluatorState.ts';
 
 interface SinglePageEvaluatorProps {
   specs: FeatureSpec[];
   presets: ZonePreset[];
-  provinces: string[];
-}
-
-interface FriendlyFormState {
-  provincia: string;
-  departamento: string;
-  sector: 'Estatal' | 'Privado';
-  ambito: 'Urbano' | 'Rural';
-  esConurbano: boolean;
-  matriculaAlumnos: number;
-  abandonoInputMode: 'pct' | 'count';
-  abandonoPrevioPct: number;
-  abandonoPrevioAlumnos: number;
-  abandonoSecPrevioPct: number;
-  sobreedadPct: number;
-  repitentesPct: number;
-  nseBajoPct: number;
-  sinInternetPct: number;
-  madreSinSecPct: number;
-  vacantesSecPct: number;
-  almuerzoPct: number;
-  // Opcionales / avanzadas (en % o 0-100 según corresponda)
-  pesoSecundariaPct: number;
-  mujeresPct: number;
-  sinAguaPct: number;
-  vacantesPrimPct: number;
-  fueraPlantaSecPct: number;
-  discapacidadPct: number;
-  indigenaPct: number;
-}
-
-function presetToFriendlyState(preset: ZonePreset): FriendlyFormState {
-  const f = preset.features;
-  const matricula = Math.max(100, Math.round(Math.pow(10, f.log_matricula_inicial)));
-  const abandonoPct = Number(f.tasa_abandono_2022.toFixed(2));
-  return {
-    provincia: preset.provincia,
-    departamento: preset.departamento,
-    sector: preset.sector,
-    ambito: preset.ambito,
-    esConurbano: f.es_conurbano === 1,
-    matriculaAlumnos: matricula,
-    abandonoInputMode: 'pct',
-    abandonoPrevioPct: abandonoPct,
-    abandonoPrevioAlumnos: Math.round((matricula * abandonoPct) / 100),
-    abandonoSecPrevioPct: Number(f.tasa_abandono_2022_sec.toFixed(2)),
-    sobreedadPct: Number((f.pct_sobreedad_2023 * 100).toFixed(2)),
-    repitentesPct: Number((f.pct_repitentes_2023 * 100).toFixed(2)),
-    nseBajoPct: Number((f.appri_pct_nse_bajo * 100).toFixed(2)),
-    sinInternetPct: Number((f.appri_pct_sin_internet * 100).toFixed(2)),
-    madreSinSecPct: Number((f.appri_pct_madre_sin_sec * 100).toFixed(2)),
-    vacantesSecPct: Number((f.car_sec_pct_hs_vacantes * 100).toFixed(2)),
-    almuerzoPct: Number((f.pob_tasa_alumnos_con_almuerzo * 100).toFixed(2)),
-    pesoSecundariaPct: Number((f.pct_matricula_8a12 * 100).toFixed(2)),
-    mujeresPct: Number((f.pct_mujeres * 100).toFixed(2)),
-    sinAguaPct: Number((f.appri_pct_sin_agua_potable * 100).toFixed(2)),
-    vacantesPrimPct: Number((f.car_pri_pct_cargos_vacantes * 100).toFixed(2)),
-    fueraPlantaSecPct: Number((f.car_sec_pct_hs_fuera_planta * 100).toFixed(2)),
-    discapacidadPct: Number((f.pob_tasa_discapacidad_prim_sec * 100).toFixed(2)),
-    indigenaPct: Number((f.pob_tasa_indigena_prim_sec * 100).toFixed(2)),
-  };
-}
-
-function buildNationalMedianState(): FriendlyFormState {
-  return {
-    provincia: 'Buenos Aires',
-    departamento: 'Mi zona',
-    sector: 'Estatal',
-    ambito: 'Urbano',
-    esConurbano: false,
-    matriculaAlumnos: 2624,
-    abandonoInputMode: 'pct',
-    abandonoPrevioPct: 0.7,
-    abandonoPrevioAlumnos: 7,
-    abandonoSecPrevioPct: 1.52,
-    sobreedadPct: 11.7,
-    repitentesPct: 3.6,
-    nseBajoPct: 15.5,
-    sinInternetPct: 10,
-    madreSinSecPct: 39.6,
-    vacantesSecPct: 0,
-    almuerzoPct: 26.8,
-    pesoSecundariaPct: 37.8,
-    mujeresPct: 49.5,
-    sinAguaPct: 8.4,
-    vacantesPrimPct: 0,
-    fueraPlantaSecPct: 0,
-    discapacidadPct: 1.8,
-    indigenaPct: 0,
-  };
+  provinces: ProvinceCycleRecord[];
 }
 
 const HUMAN_DRIVER_LABELS: Record<FeatureKey, string> = {
@@ -186,20 +100,20 @@ function getVisualRiskTheme(nivel: string) {
   }
 }
 
-export function SinglePageEvaluator({ presets, provinces }: SinglePageEvaluatorProps) {
+export function SinglePageEvaluator({ specs, presets, provinces }: SinglePageEvaluatorProps) {
   const defaultPreset = presets[0];
   const [activePresetId, setActivePresetId] = useState<string>(defaultPreset?.id ?? 'custom');
   const [form, setForm] = useState<FriendlyFormState>(() =>
-    defaultPreset ? presetToFriendlyState(defaultPreset) : buildNationalMedianState()
+    defaultPreset ? presetToFriendlyState(defaultPreset) : buildCustomState(specs, provinces)
   );
   const [matriculaText, setMatriculaText] = useState<string>(() =>
-    String((defaultPreset ? presetToFriendlyState(defaultPreset) : buildNationalMedianState()).matriculaAlumnos)
+    String((defaultPreset ? presetToFriendlyState(defaultPreset) : buildCustomState(specs, provinces)).matriculaAlumnos)
   );
   const [abPctText, setAbPctText] = useState<string>(() =>
-    String((defaultPreset ? presetToFriendlyState(defaultPreset) : buildNationalMedianState()).abandonoPrevioPct)
+    String((defaultPreset ? presetToFriendlyState(defaultPreset) : buildCustomState(specs, provinces)).abandonoPrevioPct)
   );
   const [abCountText, setAbCountText] = useState<string>(() =>
-    String((defaultPreset ? presetToFriendlyState(defaultPreset) : buildNationalMedianState()).abandonoPrevioAlumnos)
+    String((defaultPreset ? presetToFriendlyState(defaultPreset) : buildCustomState(specs, provinces)).abandonoPrevioAlumnos)
   );
   const [showAdvanced, setShowAdvanced] = useState(false);
 
@@ -208,10 +122,15 @@ export function SinglePageEvaluator({ presets, provinces }: SinglePageEvaluatorP
   const [simTutoriasPct, setSimTutoriasPct] = useState(0);
   const [simConectividadPct, setSimConectividadPct] = useState(0);
 
-  const [result, setResult] = useState<PredictApiResponse | null>(null);
-  const [simResult, setSimResult] = useState<PredictApiResponse | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [completedPrediction, setCompletedPrediction] = useState<{ key: string; data: PredictApiResponse } | null>(null);
+  const [completedSimulation, setCompletedSimulation] = useState<{ key: string; data: PredictApiResponse } | null>(null);
+  const [requestError, setRequestError] = useState<{ key: string; message: string } | null>(null);
+  const requestBody = useMemo(() => JSON.stringify(toApiPayload(form)), [form]);
+  const result = completedPrediction?.key === requestBody ? completedPrediction.data : null;
+  const errorMsg = requestError?.key === requestBody ? requestError.message : null;
+  const loading = !result && !errorMsg;
+  const simulationKey = JSON.stringify([requestBody, simSeguimientoPct, simTutoriasPct, simConectividadPct]);
+  const simResult = result && completedSimulation?.key === simulationKey ? completedSimulation.data : null;
 
   const effectiveAbandonoPrevioPct = useMemo(() => {
     if (form.abandonoInputMode === 'count') {
@@ -221,80 +140,35 @@ export function SinglePageEvaluator({ presets, provinces }: SinglePageEvaluatorP
     return form.abandonoPrevioPct;
   }, [form.abandonoInputMode, form.abandonoPrevioAlumnos, form.abandonoPrevioPct, form.matriculaAlumnos]);
 
-  const toApiPayload = (state: FriendlyFormState): Record<string, unknown> => {
-    const mat = Math.max(1, state.matriculaAlumnos);
-    const abPrev =
-      state.abandonoInputMode === 'count'
-        ? (state.abandonoPrevioAlumnos / mat) * 100
-        : state.abandonoPrevioPct;
-
-    return {
-      provincia: state.provincia,
-      departamento: state.departamento || 'Zona evaluada',
-      sector: state.sector,
-      ambito: state.ambito,
-      sector_privado: state.sector === 'Privado' ? 1 : 0,
-      ambito_rural: state.ambito === 'Rural' ? 1 : 0,
-      es_conurbano: state.esConurbano ? 1 : 0,
-      matricula_inicial: mat,
-      tasa_abandono_2022: Number(Math.max(0, abPrev).toFixed(3)),
-      tasa_abandono_2022_sec: Number(Math.max(0, state.abandonoSecPrevioPct).toFixed(3)),
-      pct_sobreedad_2023: Number((state.sobreedadPct / 100).toFixed(4)),
-      pct_repitentes_2023: Number((state.repitentesPct / 100).toFixed(4)),
-      appri_pct_nse_bajo: Number((state.nseBajoPct / 100).toFixed(4)),
-      appri_pct_sin_internet: Number((state.sinInternetPct / 100).toFixed(4)),
-      appri_pct_madre_sin_sec: Number((state.madreSinSecPct / 100).toFixed(4)),
-      car_sec_pct_hs_vacantes: Number((state.vacantesSecPct / 100).toFixed(4)),
-      pob_tasa_alumnos_con_almuerzo: Number((state.almuerzoPct / 100).toFixed(4)),
-      pct_matricula_8a12: Number((state.pesoSecundariaPct / 100).toFixed(4)),
-      pct_mujeres: Number((state.mujeresPct / 100).toFixed(4)),
-      appri_pct_sin_agua_potable: Number((state.sinAguaPct / 100).toFixed(4)),
-      car_pri_pct_cargos_vacantes: Number((state.vacantesPrimPct / 100).toFixed(4)),
-      car_sec_pct_hs_fuera_planta: Number((state.fueraPlantaSecPct / 100).toFixed(4)),
-      pob_tasa_discapacidad_prim_sec: Number((state.discapacidadPct / 100).toFixed(4)),
-      pob_tasa_indigena_prim_sec: Number((state.indigenaPct / 100).toFixed(4)),
-    };
-  };
-
-  const callPredictApi = async (state: FriendlyFormState) => {
-    setLoading(true);
-    setErrorMsg(null);
-    try {
-      const res = await fetch('/api/predict', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(toApiPayload(state)),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setErrorMsg(
-          Array.isArray(data.detalles) ? data.detalles.join(' ') : data.error || 'Error al calcular.'
-        );
-        return;
-      }
-      setResult(data as PredictApiResponse);
-      setSimResult(null);
-    } catch {
-      setErrorMsg('No se pudo conectar con el servidor de predicción (/api/predict).');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Predicción automática inicial + actualización reactiva con debounce suave cuando cambian los sliders
   useEffect(() => {
-    const timer = setTimeout(() => {
-      void callPredictApi(form);
+    const controller = new AbortController();
+    let active = true;
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch('/api/predict', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: requestBody, signal: controller.signal,
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(Array.isArray(data.detalles) ? data.detalles.join(' ') : data.error || 'Error al calcular.');
+        if (active) {
+          setCompletedPrediction({ key: requestBody, data });
+          setRequestError(null);
+        }
+      } catch (error) {
+        if (active) setRequestError({ key: requestBody, message: error instanceof Error && error.name !== 'TypeError' ? error.message : 'No se pudo conectar con el servidor de predicción (/api/predict).' });
+      }
     }, 180);
-    return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form]);
+    return () => { active = false; clearTimeout(timer); controller.abort(); };
+  }, [requestBody]);
 
   // Simulador "¿Qué pasa si intervenimos?" en vivo
   useEffect(() => {
     if (!result) return;
+    const controller = new AbortController();
+    let active = true;
     if (simSeguimientoPct === 0 && simTutoriasPct === 0 && simConectividadPct === 0) {
-      setSimResult(null);
+      setCompletedSimulation(null);
       return;
     }
 
@@ -316,6 +190,7 @@ export function SinglePageEvaluator({ presets, provinces }: SinglePageEvaluatorP
       try {
         const res = await fetch('/api/predict', {
           method: 'POST',
+          signal: controller.signal,
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             provincia: form.provincia,
@@ -325,15 +200,15 @@ export function SinglePageEvaluator({ presets, provinces }: SinglePageEvaluatorP
         });
         if (res.ok) {
           const data = (await res.json()) as PredictApiResponse;
-          setSimResult(data);
+          if (active) setCompletedSimulation({ key: simulationKey, data });
         }
       } catch {
         // Silencioso en debounce
       }
     }, 140);
 
-    return () => clearTimeout(timer);
-  }, [simSeguimientoPct, simTutoriasPct, simConectividadPct, result, form.provincia, form.departamento]);
+    return () => { active = false; clearTimeout(timer); controller.abort(); };
+  }, [simSeguimientoPct, simTutoriasPct, simConectividadPct, result, simulationKey, form.provincia, form.departamento]);
 
   const syncDraftStrings = (next: FriendlyFormState) => {
     setMatriculaText(String(next.matriculaAlumnos));
@@ -352,7 +227,7 @@ export function SinglePageEvaluator({ presets, provinces }: SinglePageEvaluatorP
   };
 
   const resetToCustom = () => {
-    const next = buildNationalMedianState();
+    const next = buildCustomState(specs, provinces);
     setActivePresetId('custom');
     setSimSeguimientoPct(0);
     setSimTutoriasPct(0);
@@ -370,6 +245,7 @@ export function SinglePageEvaluator({ presets, provinces }: SinglePageEvaluatorP
   const alumnosRetenidos = Math.max(0, alumnosEnRiesgo - simAlumnosEnRiesgo);
 
   const activePresetObj = presets.find((p) => p.id === activePresetId);
+  const provincialReference = provinces.find((p) => p.provincia === form.provincia);
 
   return (
     <div className="space-y-6">
@@ -425,9 +301,15 @@ export function SinglePageEvaluator({ presets, provinces }: SinglePageEvaluatorP
               }`}
             >
               <RotateCcw className="h-3.5 w-3.5" />
-              Mis propios datos (Mediana nacional)
+              Mis propios datos
             </button>
           </div>
+          {activePresetId === 'custom' && (
+            <p className="mt-3 text-xs leading-relaxed text-slate-600">
+              Elegí la provincia para usar su referencia de abandono de 2022, o ingresá la tasa de tu zona.
+              Los demás valores iniciales son referencias de entrenamiento: ajustalos con tus propios datos.
+            </p>
+          )}
         </div>
       </section>
 
@@ -466,13 +348,18 @@ export function SinglePageEvaluator({ presets, provinces }: SinglePageEvaluatorP
                   value={form.provincia}
                   onChange={(e) => {
                     setActivePresetId('custom');
-                    setForm((s) => ({ ...s, provincia: e.target.value }));
+                    const next = changeProvince(form, e.target.value, provinces);
+                    setForm(next);
+                    syncDraftStrings(next);
+                    setSimSeguimientoPct(0);
+                    setSimTutoriasPct(0);
+                    setSimConectividadPct(0);
                   }}
                   className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-[#1e3a5f] focus:outline-none"
                 >
                   {provinces.map((prov) => (
-                    <option key={prov} value={prov}>
-                      {prov}
+                    <option key={prov.provincia} value={prov.provincia}>
+                      {prov.provincia}
                     </option>
                   ))}
                 </select>
@@ -489,7 +376,7 @@ export function SinglePageEvaluator({ presets, provinces }: SinglePageEvaluatorP
                     setActivePresetId('custom');
                     setForm((s) => ({ ...s, departamento: e.target.value }));
                   }}
-                  placeholder="Ej. Orán, La Matanza, Esc. N° 12"
+                  placeholder="Ej. Orán, La Matanza"
                   className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-[#1e3a5f] focus:outline-none"
                 />
               </div>
@@ -552,11 +439,12 @@ export function SinglePageEvaluator({ presets, provinces }: SinglePageEvaluatorP
                     <button
                       key={opt.label}
                       type="button"
+                      disabled={opt.val && form.provincia !== 'Buenos Aires'}
                       onClick={() => {
                         setActivePresetId('custom');
                         setForm((s) => ({ ...s, esConurbano: opt.val }));
                       }}
-                      className={`rounded-md py-1.5 text-xs font-medium transition-colors ${
+                      className={`rounded-md py-1.5 text-xs font-medium transition-colors disabled:opacity-40 ${
                         form.esConurbano === opt.val
                           ? 'bg-white text-[#1e3a5f] shadow-xs font-semibold'
                           : 'text-slate-600'
@@ -612,7 +500,7 @@ export function SinglePageEvaluator({ presets, provinces }: SinglePageEvaluatorP
                               ...s,
                               matriculaAlumnos: val,
                               abandonoPrevioPct: nextPct,
-                              abandonoSecPrevioPct: Number(Math.min(100, nextPct * 1.65).toFixed(2)),
+
                             };
                           }
                           const nextCount = Math.round((val * s.abandonoPrevioPct) / 100);
@@ -639,16 +527,38 @@ export function SinglePageEvaluator({ presets, provinces }: SinglePageEvaluatorP
 
             {/* Abandono del año anterior (toggle % vs cantidad de alumnos) */}
             <div className="rounded-lg border border-slate-200 bg-slate-50/70 p-3.5 space-y-2.5">
+              <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-slate-700">
+                <label className="flex cursor-pointer items-center gap-2 font-semibold text-[#1e3a5f]">
+                  <input
+                    type="checkbox"
+                    checked={form.abandonoSource === 'provincial'}
+                    onChange={(e) => {
+                      const next = e.target.checked
+                        ? useProvinceHistory(form, provinces)
+                        : { ...form, abandonoSource: 'manual' as const };
+                      setActivePresetId('custom');
+                      setForm(next);
+                      syncDraftStrings(next);
+                    }}
+                  />
+                  Usar referencia provincial de 2022
+                </label>
+                <p className="mt-2" data-testid="history-source">
+                  {form.abandonoSource === 'provincial'
+                    ? `Referencia de ${form.provincia}: ${provincialReference?.ciclo2022Pct.toFixed(2).replace('.', ',')}%. Se actualiza al cambiar de provincia. Es un promedio provincial, no un dato observado de esta zona.`
+                    : 'Estás usando una tasa propia. Se conserva al cambiar de provincia; con las mismas variables, el modelo puede dar la misma estimación.'}
+                </p>
+              </div>
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <label htmlFor="inp-ab-prev" className="text-xs font-semibold text-slate-800">
-                  ¿Cuánto abandono hubo el año pasado?
+                  Abandono del ciclo anterior (2022)
                 </label>
                 <div className="flex items-center rounded-md border border-slate-200 bg-white p-0.5 text-[11px]">
                   <button
                     type="button"
                     onClick={() => {
-                      setAbPctText(String(form.abandonoPrevioPct));
-                      setForm((s) => ({ ...s, abandonoInputMode: 'pct' }));
+                      setAbPctText(String(effectiveAbandonoPrevioPct));
+                      setForm((s) => ({ ...s, abandonoInputMode: 'pct', abandonoPrevioPct: effectiveAbandonoPrevioPct }));
                     }}
                     className={`rounded px-2 py-1 font-medium ${
                       form.abandonoInputMode === 'pct'
@@ -662,7 +572,7 @@ export function SinglePageEvaluator({ presets, provinces }: SinglePageEvaluatorP
                     type="button"
                     onClick={() => {
                       setAbCountText(String(form.abandonoPrevioAlumnos));
-                      setForm((s) => ({ ...s, abandonoInputMode: 'count' }));
+                      setForm((s) => ({ ...s, abandonoInputMode: 'count', abandonoSource: 'manual' }));
                     }}
                     className={`rounded px-2 py-1 font-medium ${
                       form.abandonoInputMode === 'count'
@@ -692,9 +602,10 @@ export function SinglePageEvaluator({ presets, provinces }: SinglePageEvaluatorP
                       setAbCountText(String(cnt));
                       setForm((s) => ({
                         ...s,
+                        abandonoSource: 'manual',
                         abandonoPrevioPct: pct,
                         abandonoPrevioAlumnos: cnt,
-                        abandonoSecPrevioPct: Number(Math.min(100, pct * 1.65).toFixed(2)),
+
                       }));
                     }}
                     className="flex-1 accent-[#c53030]"
@@ -718,9 +629,10 @@ export function SinglePageEvaluator({ presets, provinces }: SinglePageEvaluatorP
                           setActivePresetId('custom');
                           setForm((s) => ({
                             ...s,
-                            abandonoPrevioPct: pct,
+                            abandonoSource: 'manual',
+                        abandonoPrevioPct: pct,
                             abandonoPrevioAlumnos: cnt,
-                            abandonoSecPrevioPct: Number(Math.min(100, pct * 1.65).toFixed(2)),
+
                           }));
                         }
                       }}
@@ -758,8 +670,9 @@ export function SinglePageEvaluator({ presets, provinces }: SinglePageEvaluatorP
                           setForm((s) => ({
                             ...s,
                             abandonoPrevioAlumnos: cnt,
-                            abandonoPrevioPct: pct,
-                            abandonoSecPrevioPct: Number(Math.min(100, pct * 1.65).toFixed(2)),
+                            abandonoSource: 'manual',
+                        abandonoPrevioPct: pct,
+
                           }));
                         }
                       }}
@@ -962,7 +875,8 @@ export function SinglePageEvaluator({ presets, provinces }: SinglePageEvaluatorP
         </div>
 
         {/* DERECHA: DIAGNÓSTICO CLARO Y SIMULADOR ACCIONABLE */}
-        <div className="space-y-5 lg:col-span-6">
+        <div className="space-y-5 lg:col-span-6" aria-busy={loading}>
+          {loading && <div role="status" className="rounded-xl border border-blue-200 bg-blue-50 p-6 text-sm text-blue-900">Calculando la estimación para {form.provincia}…</div>}
           {pred && result && (
             <>
               {/* Tarjeta principal semáforo */}
@@ -985,7 +899,7 @@ export function SinglePageEvaluator({ presets, provinces }: SinglePageEvaluatorP
                     <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">
                       Tasa estimada de abandono
                     </p>
-                    <p className={`mt-1 font-mono text-4xl font-bold tabular-nums ${theme.number}`}>
+                    <p data-testid="estimated-rate" className={`mt-1 font-mono text-4xl font-bold tabular-nums ${theme.number}`}>
                       {pred.tasaEstimadaPct.toFixed(2).replace('.', ',')}%
                     </p>
                   </div>
@@ -1006,6 +920,16 @@ export function SinglePageEvaluator({ presets, provinces }: SinglePageEvaluatorP
                 </div>
 
                 <p className="mt-4 text-sm leading-relaxed text-slate-700">{theme.summary}</p>
+                {pred.referenciaProvincial && (
+                  <p className="mt-3 rounded-lg border border-blue-200 bg-white/90 p-3 text-xs text-slate-700">
+                    Para calcular esta estimación se usó el abandono provincial de 2022 de {pred.referenciaProvincial.provincia}: {' '}
+                    <strong>{pred.referenciaProvincial.tasaPct.toFixed(2).replace('.', ',')}%</strong>.
+                    La predicción corresponde a una zona con los datos del formulario, no al promedio de toda la provincia.
+                  </p>
+                )}
+                {pred.advertenciasEntrada.filter((warning) => !warning.startsWith('Se usó la referencia provincial')).map((warning) => (
+                  <p key={warning} className="mt-2 text-xs text-amber-900">{warning}</p>
+                ))}
 
                 {/* Comparación visual simple contra el país */}
                 <div className="mt-4 space-y-1.5">
