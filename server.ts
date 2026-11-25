@@ -8,6 +8,7 @@ import {
   handlePredict,
   handlePredictBatch,
   handleZones,
+  handleCatalogo,
 } from './src/server/handlers.ts';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -30,6 +31,7 @@ async function createServer() {
   app.get('/api/health', (req, res) => handleHealth(req, res));
   app.get('/api/model/metadata', (req, res) => handleMetadata(req, res));
   app.get('/api/zones', (req, res) => handleZones(req, res));
+  app.get('/api/catalogo', (req, res) => handleCatalogo(req, res));
   app.post('/api/predict', (req, res) => handlePredict(req, res));
   app.post('/api/predict/batch', (req, res) => handlePredictBatch(req, res));
 

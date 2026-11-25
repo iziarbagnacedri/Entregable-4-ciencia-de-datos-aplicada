@@ -17,8 +17,12 @@ import {
   parseBatchCsv,
   predictBatchZones,
   predictSingleZone,
+  prepararZona,
+  resumenZona,
   type BatchInputItem,
 } from '../ml/model.ts';
+import { PROVINCIAS, ZONAS } from '../ml/zonas.ts';
+import type { RawFeatureInput } from '../ml/schema.ts';
 import { FEATURE_KEYS, FEATURE_SPECS, HIGH_RISK_THRESHOLD_PCT } from '../ml/schema.ts';
 
 export interface ApiRequest {
@@ -142,7 +146,12 @@ export function handlePredict(req: ApiRequest, res: ApiResponse): void {
       res.status(400).json({ error: 'Debe enviar un objeto JSON con los atributos de la zona.' });
       return;
     }
-    const result = predictSingleZone(body);
+    const zonaOk = prepararZona(body as RawFeatureInput);
+    if (!zonaOk.ok) {
+      res.status(400).json({ error: 'La zona no existe.', detalles: zonaOk.errors });
+      return;
+    }
+    const result = predictSingleZone(zonaOk.entrada);
     if (!result.ok) {
       res.status(400).json({
         error: 'Validación fallida en los datos de entrada.',
@@ -152,11 +161,12 @@ export function handlePredict(req: ApiRequest, res: ApiResponse): void {
     }
     res.status(200).json({
       zona: {
-        provincia: typeof body.provincia === 'string' ? body.provincia : 'No especificada',
-        departamento: typeof body.departamento === 'string' ? body.departamento : 'No especificado',
-        sector: result.normalizedFeatures.sector_privado === 1 ? 'Privado' : 'Estatal',
-        ambito: result.normalizedFeatures.ambito_rural === 1 ? 'Rural' : 'Urbano',
+        provincia: zonaOk.zona.provincia,
+        departamento: zonaOk.zona.departamento,
+        sector: zonaOk.zona.sector,
+        ambito: zonaOk.zona.ambito,
       },
+      zonaReal: resumenZona(zonaOk.zona),
       entradaNormalizada: result.normalizedFeatures,
       prediccion: result.prediction,
     });
@@ -205,4 +215,25 @@ export function handlePredictBatch(req: ApiRequest, res: ApiResponse): void {
   } catch {
     res.status(500).json({ error: 'Error interno al procesar el lote de zonas.' });
   }
+}
+
+export function handleCatalogo(req: ApiRequest, res: ApiResponse): void {
+  if (req.method && req.method !== 'GET') {
+    res.status(405).json({ error: 'Método no permitido. Use GET.' });
+    return;
+  }
+  res.setHeader?.('Cache-Control', 'public, max-age=3600');
+  res.status(200).json({
+    provincias: PROVINCIAS,
+    zonas: ZONAS.map((z) => ({
+      provincia: z.provincia,
+      departamento: z.departamento,
+      sector: z.sector,
+      ambito: z.ambito,
+      matricula: z.matricula,
+      tasaRealPct: z.tasaRealPct,
+      tasaModeloPct: z.tasaModeloPct,
+      variables: z.variables,
+    })),
+  });
 }

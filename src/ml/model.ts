@@ -1,4 +1,5 @@
 import { MODELO_INFO, percentilNacional, predecirZona } from './realForest.ts';
+import { validarZona, type ZonaReal } from './zonas.ts';
 import {
   FEATURE_KEYS,
   FEATURE_SPEC_MAP,
@@ -73,6 +74,7 @@ export interface BatchPredictionResponse {
   tasaMedianaEstimadaPct: number;
   umbralAltoRiesgoPct: number;
   resultados: BatchRowResult[];
+  filasRechazadas: string[];
 }
 
 function clamp(v: number, min: number, max: number): number {
@@ -89,6 +91,68 @@ export function getModelRuntimeSummary() {
     zonasReferencia: MODELO_INFO.zonasReferencia,
     p75Pct: HIGH_RISK_THRESHOLD_PCT,
     metricasPrueba: MODELO_INFO.metricasPrueba,
+  };
+}
+
+
+export interface ZonaRealResumen {
+  provincia: string;
+  departamento: string;
+  sector: string;
+  ambito: string;
+  matricula: number;
+  tasaRealPct: number;
+  tasaModeloPct: number;
+}
+
+function binario(v: unknown): number | null {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(String(v).replace(',', '.'));
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Valida que la zona (provincia, departamento, sector y ámbito) exista entre las 1.136 zonas reales
+ * y completa con SUS datos reales las variables que no se enviaron. Lo que sí se envía se respeta,
+ * así el usuario puede partir de una zona real y modificar algunos valores.
+ */
+export function prepararZona(raw: RawFeatureInput):
+  | { ok: true; entrada: RawFeatureInput; zona: ZonaReal }
+  | { ok: false; errors: string[] } {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { ok: false, errors: ['El cuerpo enviado debe ser un objeto JSON con los datos de la zona.'] };
+  }
+  const sp = binario(raw.sector_privado);
+  const ar = binario(raw.ambito_rural);
+  const sector = typeof raw.sector === 'string' && raw.sector.trim() ? raw.sector : sp === 1 ? 'Privado' : sp === 0 ? 'Estatal' : '';
+  const ambito = typeof raw.ambito === 'string' && raw.ambito.trim() ? raw.ambito : ar === 1 ? 'Rural' : ar === 0 ? 'Urbano' : '';
+  const v = validarZona(raw.provincia, raw.departamento, sector, ambito);
+  if (!v.ok) return { ok: false, errors: [v.error] };
+  const zona = v.zona;
+  const entrada: RawFeatureInput = { ...raw, provincia: zona.provincia, departamento: zona.departamento, sector: zona.sector, ambito: zona.ambito };
+  entrada.sector_privado = zona.sector === 'Privado' ? 1 : 0;
+  entrada.ambito_rural = zona.ambito === 'Rural' ? 1 : 0;
+  entrada.es_conurbano = zona.variables.es_conurbano ?? 0;
+  for (const k of FEATURE_KEYS) {
+    const actual = entrada[k];
+    if ((actual === undefined || actual === null || (actual as unknown) === '') && zona.variables[k] !== undefined) {
+      // Si se informó la matrícula en alumnos, el log se calcula de ahí y no del dato real
+      if (k === 'log_matricula_inicial' && entrada.matricula_inicial !== undefined) continue;
+      entrada[k] = zona.variables[k];
+    }
+  }
+  return { ok: true, entrada, zona };
+}
+
+export function resumenZona(z: ZonaReal): ZonaRealResumen {
+  return {
+    provincia: z.provincia,
+    departamento: z.departamento,
+    sector: z.sector,
+    ambito: z.ambito,
+    matricula: z.matricula,
+    tasaRealPct: z.tasaRealPct,
+    tasaModeloPct: z.tasaModeloPct,
   };
 }
 
@@ -281,6 +345,12 @@ export function predictBatchZones(items: BatchInputItem[]): {
   const rawResults: Array<Omit<BatchRowResult, 'rankingLote' | 'prioridadTop25Lote'>> = [];
 
   items.forEach((item, idx) => {
+    const zonaOk = prepararZona(item);
+    if (!zonaOk.ok) {
+      rowErrors.push(`Fila ${idx + 1}: ${zonaOk.errors.join(' ')}`);
+      return;
+    }
+    item = { ...zonaOk.entrada, zonaId: item.zonaId } as BatchInputItem;
     const res = predictSingleZone(item);
     if (!res.ok) {
       rowErrors.push(`Fila ${idx + 1}: ${res.errors.join(' ')}`);
@@ -315,8 +385,9 @@ export function predictBatchZones(items: BatchInputItem[]): {
     });
   });
 
-  if (rowErrors.length > 0) {
-    return { ok: false, errors: rowErrors.slice(0, 8) };
+  // Las filas con zonas inexistentes o datos inválidos no frenan el lote: se informan aparte
+  if (rawResults.length === 0) {
+    return { ok: false, errors: rowErrors.length ? rowErrors.slice(0, 8) : ['Ninguna fila válida para evaluar.'] };
   }
 
   // Ordenar de mayor a menor riesgo estimado (uso principal del Ministerio: priorización territorial)
@@ -343,6 +414,7 @@ export function predictBatchZones(items: BatchInputItem[]): {
       tasaMedianaEstimadaPct: Number(median.toFixed(3)),
       umbralAltoRiesgoPct: HIGH_RISK_THRESHOLD_PCT,
       resultados: ranked,
+      filasRechazadas: rowErrors.slice(0, 50),
     },
   };
 }
@@ -395,12 +467,13 @@ export function parseBatchCsv(csvText: string): {
     'alumnos_repitentes',
   ]);
 
-  const hasAnyFeature = headers.some((h) => FEATURE_KEYS.includes(h as FeatureKey) || h === 'tasa_abandono_2022' || h === 'salidos_sin_pase_2022');
-  if (!hasAnyFeature) {
+  // Alcanza con identificar la zona (provincia y departamento): sus datos reales se completan solos
+  const tieneZona = headers.includes('provincia') && headers.includes('departamento');
+  if (!tieneZona) {
     return {
       ok: false,
       errors: [
-        'Los encabezados del CSV no coinciden con las columnas esperadas del modelo (variables.json). Descargue la plantilla de ejemplo para verificar el formato.',
+        'El CSV tiene que tener al menos las columnas provincia y departamento (y sector y ámbito). Las variables del modelo son opcionales: si faltan, se usan los datos reales de la zona. Descargue la plantilla para ver el formato.',
       ],
     };
   }

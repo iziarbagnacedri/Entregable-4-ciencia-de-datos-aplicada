@@ -101,3 +101,19 @@ export interface PredictApiResponse {
   entradaNormalizada: FeatureVector;
   prediccion: PredictionOutput;
 }
+
+export interface ZonaCatalogo {
+  provincia: string;
+  departamento: string;
+  sector: 'Estatal' | 'Privado';
+  ambito: 'Urbano' | 'Rural';
+  matricula: number;
+  tasaRealPct: number;
+  tasaModeloPct: number;
+  variables: Partial<Record<FeatureKey, number>>;
+}
+
+export interface CatalogoResponse {
+  provincias: string[];
+  zonas: ZonaCatalogo[];
+}

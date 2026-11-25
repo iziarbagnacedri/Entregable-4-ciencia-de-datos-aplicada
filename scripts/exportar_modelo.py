@@ -1,4 +1,5 @@
-"""Exporta el Random Forest de la Entrega 3 (modelo_abandono.joblib) a src/ml/random_forest.json.
+"""Exporta el Random Forest de la Entrega 3 (modelo_abandono.joblib) a src/ml/randomForestData.ts
+y el catálogo de las 1.136 zonas reales a src/ml/zonasData.ts.
 
 Uso (desde la raíz del repo, con los CSV y el .joblib en la carpeta indicada):
     python scripts/exportar_modelo.py RUTA_DATOS RUTA_JOBLIB
@@ -160,7 +161,14 @@ modelo = {
   'referencia_nacional_pred_pct': sorted(round(float(v),4) for v in pred_all),
   'trees': trees,
 }
-json.dump(modelo, open(os.path.join(REPO,'src/ml/random_forest.json'),'w'), separators=(',',':'))
+def modulo_ts(obj, nombre, comentario):
+    # Texto leído con JSON.parse: así TypeScript no revisa miles de números y el build tarda segundos
+    texto = json.dumps(json.dumps(obj, ensure_ascii=False, separators=(',', ':')), ensure_ascii=False)
+    return (f"// {comentario}\n// Se guarda como texto y se lee con JSON.parse para que TypeScript no tenga que revisar\n"
+            f"// miles de números uno por uno (así el build en Vercel tarda segundos y no minutos).\n"
+            f"const {nombre}: unknown = JSON.parse({texto});\nexport default {nombre};\n")
+with open(os.path.join(REPO, 'src/ml/randomForestData.ts'), 'w') as fh:
+    fh.write(modulo_ts(modelo, 'modelo', 'Generado por scripts/exportar_modelo.py a partir de modelo_abandono.joblib. No editar a mano.'))
 # casos de verificación (zonas reales + con faltantes) para test de paridad
 rng = np.random.default_rng(0)
 idx = rng.choice(len(X), 60, replace=False)
@@ -168,4 +176,16 @@ casos = X.iloc[idx][COLS].copy()
 casos.iloc[:5, [0,5,9,18]] = np.nan
 casos['esperado_pct'] = np.clip(np.expm1(pipe.predict(casos[COLS])), 0, 100)
 json.dump([{k:(None if pd.isna(v) else float(v)) for k,v in r.items()} for r in casos.to_dict('records')], open(os.path.join(REPO,'src/ml/casos_paridad.json'),'w'))
-print('Listo: src/ml/random_forest.json y src/ml/casos_paridad.json')
+
+# ---------- Catálogo de las 1.136 zonas reales (para validar zonas y completar sus datos) ----------
+filas = []
+for k, (i, r) in enumerate(df.iterrows()):
+    vals = [None if pd.isna(X.loc[i, c]) else float(f'{float(X.loc[i, c]):.8g}') for c in COLS]
+    filas.append([r.provincia, str(r.departamento).strip(), r.sector, r.ambito, int(r.matricula_inicial),
+                  round(float(r.tasa_abandono_pct), 3), round(float(pred_all[k]), 3), vals])
+filas.sort(key=lambda z: (z[0], z[1], z[2], z[3]))
+zonas = {'columnas': ['provincia', 'departamento', 'sector', 'ambito', 'matricula', 'tasaReal', 'tasaModelo', 'variables'],
+         'variables': COLS, 'filas': filas}
+with open(os.path.join(REPO, 'src/ml/zonasData.ts'), 'w') as fh:
+    fh.write(modulo_ts(zonas, 'zonas', 'Generado por scripts/exportar_modelo.py: las 1.136 zonas reales (ciclo 2023) con sus 20 variables. No editar a mano.'))
+print('Listo: src/ml/randomForestData.ts, src/ml/zonasData.ts y src/ml/casos_paridad.json')

@@ -4,11 +4,12 @@ import { ApiContractModal } from './components/ApiContractModal.tsx';
 import { BatchEvaluator } from './components/BatchEvaluator.tsx';
 import { MethodologyView } from './components/MethodologyView.tsx';
 import { SinglePageEvaluator } from './components/SinglePageEvaluator.tsx';
-import type { ModelMetadataResponse, ZonesCatalogResponse } from './types/api.ts';
+import type { CatalogoResponse, ModelMetadataResponse, ZonesCatalogResponse } from './types/api.ts';
 
 export default function App() {
   const [metadata, setMetadata] = useState<ModelMetadataResponse | null>(null);
   const [zonesData, setZonesData] = useState<ZonesCatalogResponse | null>(null);
+  const [catalogo, setCatalogo] = useState<CatalogoResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -22,17 +23,19 @@ export default function App() {
       setLoading(true);
       setLoadError(null);
       try {
-        const [metaRes, zonesRes] = await Promise.all([
+        const [metaRes, zonesRes, catRes] = await Promise.all([
           fetch('/api/model/metadata'),
           fetch('/api/zones'),
+          fetch('/api/catalogo'),
         ]);
-        if (!metaRes.ok || !zonesRes.ok) {
+        if (!metaRes.ok || !zonesRes.ok || !catRes.ok) {
           throw new Error('Error al consultar la API');
         }
-        const [metaJson, zonesJson] = await Promise.all([metaRes.json(), zonesRes.json()]);
+        const [metaJson, zonesJson, catJson] = await Promise.all([metaRes.json(), zonesRes.json(), catRes.json()]);
         if (active) {
           setMetadata(metaJson as ModelMetadataResponse);
           setZonesData(zonesJson as ZonesCatalogResponse);
+          setCatalogo(catJson as CatalogoResponse);
         }
       } catch {
         if (active) {
@@ -108,7 +111,7 @@ export default function App() {
           </div>
         )}
 
-        {loading || !metadata || !zonesData ? (
+        {loading || !metadata || !zonesData || !catalogo ? (
           <div className="space-y-5">
             <div className="h-32 animate-pulse rounded-xl border border-slate-200 bg-white" />
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
@@ -120,7 +123,7 @@ export default function App() {
           <SinglePageEvaluator
             specs={metadata.variables}
             presets={zonesData.presets}
-            provinces={[...zonesData.provinces].sort((a, b) => a.provincia.localeCompare(b.provincia, 'es'))}
+            catalogo={catalogo}
           />
         )}
       </main>

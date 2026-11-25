@@ -7,7 +7,9 @@ import {
   parseBatchCsv,
   predictBatchZones,
   predictSingleZone,
+  prepararZona,
 } from './model.ts';
+import { ZONAS } from './zonas.ts';
 import { predecirZona } from './realForest.ts';
 import CASOS_PARIDAD from './casos_paridad.json';
 
@@ -133,8 +135,8 @@ test('predictBatchZones ordena descendente por riesgo y marca correctamente el T
 });
 
 test('parseBatchCsv interpreta CSV con columnas de variables.json y rechaza formatos corruptos', () => {
-  const header = ['zonaId', 'provincia', ...FEATURE_KEYS].join(',');
-  const row1 = ['Z-1', 'Salta', ...FEATURE_KEYS.map((k) => (k === 'tasa_abandono_2022' ? '2.4' : ''))].join(',');
+  const header = ['zonaId', 'provincia', 'departamento', ...FEATURE_KEYS].join(',');
+  const row1 = ['Z-1', 'Salta', 'ORAN', ...FEATURE_KEYS.map((k) => (k === 'tasa_abandono_2022' ? '2.4' : ''))].join(',');
   const parsed = parseBatchCsv(`${header}\n${row1}`);
   assert.equal(parsed.ok, true);
   if (parsed.ok) {
@@ -145,4 +147,56 @@ test('parseBatchCsv interpreta CSV con columnas de variables.json y rechaza form
 
   const invalid = parseBatchCsv('col_desconocida,otra\n1,2');
   assert.equal(invalid.ok, false);
+});
+
+test('las 1.136 zonas reales dan, solo con su ubicación, lo mismo que el modelo en Python', () => {
+  let maxDif = 0;
+  for (const z of ZONAS) {
+    const prep = prepararZona({ provincia: z.provincia, departamento: z.departamento, sector: z.sector, ambito: z.ambito });
+    assert.equal(prep.ok, true);
+    if (!prep.ok) continue;
+    const r = predictSingleZone(prep.entrada);
+    assert.equal(r.ok, true);
+    if (r.ok) maxDif = Math.max(maxDif, Math.abs(r.prediction.tasaEstimadaPct - z.tasaModeloPct));
+  }
+  assert.ok(maxDif < 0.002, `diferencia máxima ${maxDif}`);
+});
+
+test('valida que la zona exista en esa provincia', () => {
+  const malDepto = prepararZona({ provincia: 'Entre Ríos', departamento: 'San Isidro', sector: 'Estatal', ambito: 'Urbano' });
+  assert.equal(malDepto.ok, false);
+  if (!malDepto.ok) assert.match(malDepto.errors[0], /no existe en la provincia de Entre Ríos/);
+
+  const malCombo = prepararZona({ provincia: 'Buenos Aires', departamento: 'San Isidro', sector: 'Privado', ambito: 'Rural' });
+  assert.equal(malCombo.ok, false);
+  if (!malCombo.ok) assert.match(malCombo.errors[0], /Opciones/);
+
+  const sinZona = prepararZona({ tasa_abandono_2022: 2 });
+  assert.equal(sinZona.ok, false);
+
+  const ok = prepararZona({ provincia: 'buenos aires', departamento: 'san isidro', sector: 'Privado', ambito: 'Urbano' });
+  assert.equal(ok.ok, true);
+});
+
+test('cambiar un dato de una zona real cambia la predicción', () => {
+  const base = prepararZona({ provincia: 'Salta', departamento: 'Orán', sector: 'Estatal', ambito: 'Urbano' });
+  const bajo = prepararZona({ provincia: 'Salta', departamento: 'Orán', sector: 'Estatal', ambito: 'Urbano', tasa_abandono_2022: 0.2 });
+  assert.ok(base.ok && bajo.ok);
+  if (base.ok && bajo.ok) {
+    const a = predictSingleZone(base.entrada);
+    const b = predictSingleZone(bajo.entrada);
+    assert.ok(a.ok && b.ok && b.prediction.tasaEstimadaPct < a.prediction.tasaEstimadaPct);
+  }
+});
+
+test('el lote informa las zonas inexistentes y evalúa el resto', () => {
+  const res = predictBatchZones([
+    { provincia: 'Formosa', departamento: 'Bermejo', sector: 'Estatal', ambito: 'Rural' },
+    { provincia: 'Entre Ríos', departamento: 'San Isidro', sector: 'Estatal', ambito: 'Urbano' },
+  ]);
+  assert.equal(res.ok, true);
+  if (res.ok) {
+    assert.equal(res.batch.totalZonas, 1);
+    assert.equal(res.batch.filasRechazadas.length, 1);
+  }
 });

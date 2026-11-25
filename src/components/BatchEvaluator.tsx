@@ -132,59 +132,21 @@ export function BatchEvaluator({ metadata }: BatchEvaluatorProps) {
     URL.revokeObjectURL(url);
   };
 
+  // Lote de 10 zonas reales identificadas solo por su ubicación: la API completa sus datos reales
   const loadExpandedMinistryBatch = () => {
-    if (!metadata) return;
-    // Simula un despacho jurisdiccional ampliado de 10 zonas combinando ejemplos + nuevas variantes con faltantes
-    const base = metadata.ejemploLote;
-    const extraRows = [
-      {
-        ...base[3],
-        zonaId: 'FO-BERMEJO-EST-RUR',
-        provincia: 'Formosa',
-        departamento: 'BERMEJO',
-        tasa_abandono_2022: 3.45,
-        tasa_abandono_2022_sec: 5.8,
-        pct_sobreedad_2023: 0.29,
-        appri_pct_nse_bajo: 0.66,
-      },
-      {
-        ...base[4],
-        zonaId: 'SA-TARTAGAL-EST-RUR',
-        provincia: 'Salta',
-        departamento: 'SAN MARTÍN',
-        ambito: 'Rural' as const,
-        ambito_rural: 1,
-        tasa_abandono_2022: 2.85,
-        tasa_abandono_2022_sec: 4.9,
-        pct_sobreedad_2023: 0.26,
-      },
-      {
-        ...base[0],
-        zonaId: 'BA-TIGRE-EST-URB',
-        provincia: 'Buenos Aires',
-        departamento: 'TIGRE',
-        tasa_abandono_2022: 0.55,
-        pct_sobreedad_2023: 0.14,
-      },
-      {
-        ...base[2],
-        zonaId: 'CBA-CAPITAL-PRI-URB',
-        provincia: 'Córdoba',
-        departamento: 'CAPITAL',
-        es_conurbano: 0,
-        tasa_abandono_2022: 0.16,
-      },
-      {
-        ...base[3],
-        zonaId: 'MI-OBERÁ-EST-RUR',
-        provincia: 'Misiones',
-        departamento: 'OBERÁ',
-        tasa_abandono_2022: 2.35,
-        tasa_abandono_2022_sec: 4.1,
-        pct_sobreedad_2023: 0.23,
-      },
-    ];
-    const text = buildCsvFromEjemplo([...base, ...extraRows]);
+    const text = [
+      'zonaId,provincia,departamento,sector,ambito',
+      'FO-BERMEJO-EST-RUR,Formosa,BERMEJO,Estatal,Rural',
+      'SA-SANMARTIN-EST-RUR,Salta,GENERAL JOSE DE SAN MARTIN,Estatal,Rural',
+      'CH-GUEMES-EST-RUR,Chaco,GENERAL GUEMES,Estatal,Rural',
+      'MI-OBERA-EST-RUR,Misiones,OBERA,Estatal,Rural',
+      'ER-PARANA-EST-URB,Entre Ríos,PARANA,Estatal,Urbano',
+      'SF-ROSARIO-EST-URB,Santa Fe,ROSARIO,Estatal,Urbano',
+      'MZ-SANRAFAEL-EST-URB,Mendoza,SAN RAFAEL,Estatal,Urbano',
+      'BA-TIGRE-EST-URB,Buenos Aires,TIGRE,Estatal,Urbano',
+      'CB-CAPITAL-PRI-URB,Córdoba,CAPITAL,Privado,Urbano',
+      'CABA-COMUNA1-PRI-URB,Ciudad de Buenos Aires,Comuna 1,Privado,Urbano',
+    ].join('\n');
     setCsvText(text);
     void evaluateCsv(text);
   };
@@ -219,8 +181,8 @@ export function BatchEvaluator({ metadata }: BatchEvaluatorProps) {
               Carga de Lotes CSV y Ranking Jurisdiccional
             </h1>
             <p className="mt-1 text-xs text-slate-600">
-              Procesa hasta 500 zonas educativas por archivo con las 20 columnas de{' '}
-              <code className="font-mono text-slate-800">variables.json</code>, imputa valores faltantes y devuelve el ranking ordenado de mayor a menor riesgo.
+              Procesa hasta 500 zonas por archivo. Alcanza con provincia, departamento, sector y ámbito: los datos de cada zona real se completan solos (o podés enviar tus propios valores en las columnas de{' '}
+              <code className="font-mono text-slate-800">variables.json</code>). Las zonas que no existen se informan aparte.
             </p>
           </div>
 
@@ -231,7 +193,7 @@ export function BatchEvaluator({ metadata }: BatchEvaluatorProps) {
               className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 whitespace-nowrap hover:bg-slate-50"
             >
               <FileSpreadsheet className="h-3.5 w-3.5 text-[#2c5282]" />
-              Simular lote 10 zonas
+              Lote de 10 zonas reales
             </button>
             <button
               type="button"
@@ -285,6 +247,24 @@ export function BatchEvaluator({ metadata }: BatchEvaluatorProps) {
             >
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
               <span>{errorMsg}</span>
+            </div>
+          )}
+          {batchResult && batchResult.filasRechazadas.length > 0 && (
+            <div
+              role="alert"
+              className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900"
+            >
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <div>
+                <p className="font-semibold">
+                  {batchResult.filasRechazadas.length} fila(s) no se evaluaron porque la zona no existe o tiene datos inválidos:
+                </p>
+                <ul className="mt-1 list-disc pl-4">
+                  {batchResult.filasRechazadas.map((f) => (
+                    <li key={f}>{f}</li>
+                  ))}
+                </ul>
+              </div>
             </div>
           )}
         </div>

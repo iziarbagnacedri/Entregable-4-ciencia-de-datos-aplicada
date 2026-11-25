@@ -10,22 +10,177 @@ import {
   Sparkles,
   Users,
 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   FeatureKey,
   FeatureSpec,
   FeatureVector,
   PredictApiResponse,
   ZonePreset,
-  ProvinceCycleRecord,
+  CatalogoResponse,
+  ZonaCatalogo,
 } from '../types/api.ts';
-
-import { buildCustomState, changeProvince, presetToFriendlyState, toApiPayload, useProvinceHistory, type FriendlyFormState } from './evaluatorState.ts';
 
 interface SinglePageEvaluatorProps {
   specs: FeatureSpec[];
   presets: ZonePreset[];
-  provinces: ProvinceCycleRecord[];
+  catalogo: CatalogoResponse;
+}
+
+interface FriendlyFormState {
+  provincia: string;
+  departamento: string;
+  sector: 'Estatal' | 'Privado';
+  ambito: 'Urbano' | 'Rural';
+  esConurbano: boolean;
+  matriculaAlumnos: number;
+  abandonoInputMode: 'pct' | 'count';
+  abandonoPrevioPct: number;
+  abandonoPrevioAlumnos: number;
+  abandonoSecPrevioPct: number;
+  sobreedadPct: number;
+  repitentesPct: number;
+  nseBajoPct: number;
+  sinInternetPct: number;
+  madreSinSecPct: number;
+  vacantesSecPct: number;
+  almuerzoPct: number;
+  // Opcionales / avanzadas (en % o 0-100 según corresponda)
+  pesoSecundariaPct: number;
+  mujeresPct: number;
+  sinAguaPct: number;
+  vacantesPrimPct: number;
+  fueraPlantaSecPct: number;
+  discapacidadPct: number;
+  indigenaPct: number;
+}
+
+function presetToFriendlyState(preset: ZonePreset): FriendlyFormState {
+  const f = preset.features;
+  const matricula = Math.max(100, Math.round(Math.pow(10, f.log_matricula_inicial)));
+  const abandonoPct = Number(f.tasa_abandono_2022.toFixed(2));
+  return {
+    provincia: preset.provincia,
+    departamento: preset.departamento,
+    sector: preset.sector,
+    ambito: preset.ambito,
+    esConurbano: f.es_conurbano === 1,
+    matriculaAlumnos: matricula,
+    abandonoInputMode: 'pct',
+    abandonoPrevioPct: abandonoPct,
+    abandonoPrevioAlumnos: Math.round((matricula * abandonoPct) / 100),
+    abandonoSecPrevioPct: Number(f.tasa_abandono_2022_sec.toFixed(2)),
+    sobreedadPct: Number((f.pct_sobreedad_2023 * 100).toFixed(2)),
+    repitentesPct: Number((f.pct_repitentes_2023 * 100).toFixed(2)),
+    nseBajoPct: Number((f.appri_pct_nse_bajo * 100).toFixed(2)),
+    sinInternetPct: Number((f.appri_pct_sin_internet * 100).toFixed(2)),
+    madreSinSecPct: Number((f.appri_pct_madre_sin_sec * 100).toFixed(2)),
+    vacantesSecPct: Number((f.car_sec_pct_hs_vacantes * 100).toFixed(2)),
+    almuerzoPct: Number((f.pob_tasa_alumnos_con_almuerzo * 100).toFixed(2)),
+    pesoSecundariaPct: Number((f.pct_matricula_8a12 * 100).toFixed(2)),
+    mujeresPct: Number((f.pct_mujeres * 100).toFixed(2)),
+    sinAguaPct: Number((f.appri_pct_sin_agua_potable * 100).toFixed(2)),
+    vacantesPrimPct: Number((f.car_pri_pct_cargos_vacantes * 100).toFixed(2)),
+    fueraPlantaSecPct: Number((f.car_sec_pct_hs_fuera_planta * 100).toFixed(2)),
+    discapacidadPct: Number((f.pob_tasa_discapacidad_prim_sec * 100).toFixed(2)),
+    indigenaPct: Number((f.pob_tasa_indigena_prim_sec * 100).toFixed(2)),
+  };
+}
+
+function buildNationalMedianState(): FriendlyFormState {
+  return {
+    provincia: 'Buenos Aires',
+    departamento: 'Mi zona',
+    sector: 'Estatal',
+    ambito: 'Urbano',
+    esConurbano: false,
+    matriculaAlumnos: 2624,
+    abandonoInputMode: 'pct',
+    abandonoPrevioPct: 0.7,
+    abandonoPrevioAlumnos: 7,
+    abandonoSecPrevioPct: 1.52,
+    sobreedadPct: 11.7,
+    repitentesPct: 3.6,
+    nseBajoPct: 15.5,
+    sinInternetPct: 10,
+    madreSinSecPct: 39.6,
+    vacantesSecPct: 0,
+    almuerzoPct: 26.8,
+    pesoSecundariaPct: 37.8,
+    mujeresPct: 49.5,
+    sinAguaPct: 8.4,
+    vacantesPrimPct: 0,
+    fueraPlantaSecPct: 0,
+    discapacidadPct: 1.8,
+    indigenaPct: 0,
+  };
+}
+
+
+function norm(txt: string): string {
+  return String(txt ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/\s+/g, ' ').trim();
+}
+
+function mismaZona(z: ZonaCatalogo, prov: string, depto: string, sector: string, ambito: string): boolean {
+  return norm(z.provincia) === norm(prov) && norm(z.departamento) === norm(depto) && z.sector === sector && z.ambito === ambito;
+}
+
+/** Pasa una zona real del catálogo al formulario. Las variables que esa zona no tiene se muestran con la mediana. */
+function zonaToFriendlyState(z: ZonaCatalogo, specs: FeatureSpec[]): FriendlyFormState {
+  const features = Object.fromEntries(
+    specs.map((sp) => [sp.key, z.variables[sp.key] ?? sp.median])
+  ) as FeatureVector;
+  const base = presetToFriendlyState({
+    id: 'catalogo',
+    nombre: z.departamento,
+    provincia: z.provincia,
+    departamento: z.departamento,
+    sector: z.sector,
+    ambito: z.ambito,
+    resumen: '',
+    features,
+  });
+  return {
+    ...base,
+    matriculaAlumnos: z.matricula,
+    abandonoPrevioAlumnos: Math.round((z.matricula * base.abandonoPrevioPct) / 100),
+  };
+}
+
+// Campo del formulario → variable del modelo (en %, el modelo usa proporciones salvo las tasas de abandono)
+const CAMPOS_VARIABLES: Array<[keyof FriendlyFormState, FeatureKey, 'pct' | 'prop']> = [
+  ['abandonoSecPrevioPct', 'tasa_abandono_2022_sec', 'pct'],
+  ['sobreedadPct', 'pct_sobreedad_2023', 'prop'],
+  ['repitentesPct', 'pct_repitentes_2023', 'prop'],
+  ['nseBajoPct', 'appri_pct_nse_bajo', 'prop'],
+  ['sinInternetPct', 'appri_pct_sin_internet', 'prop'],
+  ['madreSinSecPct', 'appri_pct_madre_sin_sec', 'prop'],
+  ['vacantesSecPct', 'car_sec_pct_hs_vacantes', 'prop'],
+  ['almuerzoPct', 'pob_tasa_alumnos_con_almuerzo', 'prop'],
+  ['pesoSecundariaPct', 'pct_matricula_8a12', 'prop'],
+  ['mujeresPct', 'pct_mujeres', 'prop'],
+  ['sinAguaPct', 'appri_pct_sin_agua_potable', 'prop'],
+  ['vacantesPrimPct', 'car_pri_pct_cargos_vacantes', 'prop'],
+  ['fueraPlantaSecPct', 'car_sec_pct_hs_fuera_planta', 'prop'],
+  ['discapacidadPct', 'pob_tasa_discapacidad_prim_sec', 'prop'],
+  ['indigenaPct', 'pob_tasa_indigena_prim_sec', 'prop'],
+];
+
+function abandonoPrevio(state: FriendlyFormState): number {
+  const mat = Math.max(1, state.matriculaAlumnos);
+  return state.abandonoInputMode === 'count' ? (state.abandonoPrevioAlumnos / mat) * 100 : state.abandonoPrevioPct;
+}
+
+/** Qué datos difieren de los reales de la zona (los que el usuario cambió a mano). */
+function camposModificados(form: FriendlyFormState, base: FriendlyFormState | null): string[] {
+  if (!base) return [];
+  const cambios: string[] = [];
+  if (form.matriculaAlumnos !== base.matriculaAlumnos) cambios.push('matriculaAlumnos');
+  if (Math.abs(abandonoPrevio(form) - abandonoPrevio(base)) > 1e-6) cambios.push('abandonoPrevio');
+  for (const [campo] of CAMPOS_VARIABLES) {
+    if (form[campo] !== base[campo]) cambios.push(campo);
+  }
+  return cambios;
 }
 
 const HUMAN_DRIVER_LABELS: Record<FeatureKey, string> = {
@@ -100,21 +255,22 @@ function getVisualRiskTheme(nivel: string) {
   }
 }
 
-export function SinglePageEvaluator({ specs, presets, provinces }: SinglePageEvaluatorProps) {
+export function SinglePageEvaluator({ specs, presets, catalogo }: SinglePageEvaluatorProps) {
+  const zonas = catalogo.zonas;
+  const provinces = catalogo.provincias;
+  const zonaDePreset = (p: ZonePreset) => zonas.find((z) => mismaZona(z, p.provincia, p.departamento, p.sector, p.ambito));
   const defaultPreset = presets[0];
-  const [activePresetId, setActivePresetId] = useState<string>(defaultPreset?.id ?? 'custom');
-  const [form, setForm] = useState<FriendlyFormState>(() =>
-    defaultPreset ? presetToFriendlyState(defaultPreset) : buildCustomState(specs, provinces)
-  );
-  const [matriculaText, setMatriculaText] = useState<string>(() =>
-    String((defaultPreset ? presetToFriendlyState(defaultPreset) : buildCustomState(specs, provinces)).matriculaAlumnos)
-  );
-  const [abPctText, setAbPctText] = useState<string>(() =>
-    String((defaultPreset ? presetToFriendlyState(defaultPreset) : buildCustomState(specs, provinces)).abandonoPrevioPct)
-  );
-  const [abCountText, setAbCountText] = useState<string>(() =>
-    String((defaultPreset ? presetToFriendlyState(defaultPreset) : buildCustomState(specs, provinces)).abandonoPrevioAlumnos)
-  );
+  const zonaInicial = (defaultPreset && zonaDePreset(defaultPreset)) || zonas[0];
+  const estadoInicial = zonaToFriendlyState(zonaInicial, specs);
+  const [activePresetId, setActivePresetId] = useState<string>(defaultPreset?.id ?? 'catalogo');
+  const [form, setForm] = useState<FriendlyFormState>(estadoInicial);
+  // Datos reales de la zona elegida: sirven para saber qué cambió el usuario a mano
+  const [zonaBase, setZonaBase] = useState<FriendlyFormState>(estadoInicial);
+  const [matriculaText, setMatriculaText] = useState<string>(String(estadoInicial.matriculaAlumnos));
+  const [abPctText, setAbPctText] = useState<string>(String(estadoInicial.abandonoPrevioPct));
+  const [abCountText, setAbCountText] = useState<string>(String(estadoInicial.abandonoPrevioAlumnos));
+  const [cambio, setCambio] = useState<{ antes: number; ahora: number } | null>(null);
+  const ultimaPeticion = useRef(0);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   // Simulador de medidas de retención
@@ -122,15 +278,10 @@ export function SinglePageEvaluator({ specs, presets, provinces }: SinglePageEva
   const [simTutoriasPct, setSimTutoriasPct] = useState(0);
   const [simConectividadPct, setSimConectividadPct] = useState(0);
 
-  const [completedPrediction, setCompletedPrediction] = useState<{ key: string; data: PredictApiResponse } | null>(null);
-  const [completedSimulation, setCompletedSimulation] = useState<{ key: string; data: PredictApiResponse } | null>(null);
-  const [requestError, setRequestError] = useState<{ key: string; message: string } | null>(null);
-  const requestBody = useMemo(() => JSON.stringify(toApiPayload(form)), [form]);
-  const result = completedPrediction?.key === requestBody ? completedPrediction.data : null;
-  const errorMsg = requestError?.key === requestBody ? requestError.message : null;
-  const loading = !result && !errorMsg;
-  const simulationKey = JSON.stringify([requestBody, simSeguimientoPct, simTutoriasPct, simConectividadPct]);
-  const simResult = result && completedSimulation?.key === simulationKey ? completedSimulation.data : null;
+  const [result, setResult] = useState<PredictApiResponse | null>(null);
+  const [simResult, setSimResult] = useState<PredictApiResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const effectiveAbandonoPrevioPct = useMemo(() => {
     if (form.abandonoInputMode === 'count') {
@@ -140,35 +291,83 @@ export function SinglePageEvaluator({ specs, presets, provinces }: SinglePageEva
     return form.abandonoPrevioPct;
   }, [form.abandonoInputMode, form.abandonoPrevioAlumnos, form.abandonoPrevioPct, form.matriculaAlumnos]);
 
-  useEffect(() => {
-    const controller = new AbortController();
-    let active = true;
-    const timer = setTimeout(async () => {
-      try {
-        const res = await fetch('/api/predict', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: requestBody, signal: controller.signal,
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(Array.isArray(data.detalles) ? data.detalles.join(' ') : data.error || 'Error al calcular.');
-        if (active) {
-          setCompletedPrediction({ key: requestBody, data });
-          setRequestError(null);
-        }
-      } catch (error) {
-        if (active) setRequestError({ key: requestBody, message: error instanceof Error && error.name !== 'TypeError' ? error.message : 'No se pudo conectar con el servidor de predicción (/api/predict).' });
+  const toApiPayload = (state: FriendlyFormState): Record<string, unknown> => {
+    // Se manda la zona y SOLO los datos que el usuario cambió: el resto la API lo completa
+    // con los datos reales de esa zona (incluidos los que faltan, que el modelo imputa igual que en el notebook).
+    const payload: Record<string, unknown> = {
+      provincia: state.provincia,
+      departamento: state.departamento,
+      sector: state.sector,
+      ambito: state.ambito,
+    };
+    const mismaUbicacion =
+      norm(state.provincia) === norm(zonaBase.provincia) &&
+      norm(state.departamento) === norm(zonaBase.departamento) &&
+      state.sector === zonaBase.sector &&
+      state.ambito === zonaBase.ambito;
+    const cambios = new Set(mismaUbicacion ? camposModificados(state, zonaBase) : ['matriculaAlumnos', 'abandonoPrevio', ...CAMPOS_VARIABLES.map((c) => c[0])]);
+    if (cambios.has('matriculaAlumnos')) payload.matricula_inicial = Math.max(1, state.matriculaAlumnos);
+    if (cambios.has('abandonoPrevio')) payload.tasa_abandono_2022 = Number(Math.max(0, abandonoPrevio(state)).toFixed(3));
+    for (const [campo, variable, tipo] of CAMPOS_VARIABLES) {
+      if (!cambios.has(campo)) continue;
+      const v = Number(state[campo]);
+      payload[variable] = tipo === 'pct' ? Number(Math.max(0, v).toFixed(3)) : Number((v / 100).toFixed(4));
+    }
+    return payload;
+  };
+
+  const callPredictApi = async (state: FriendlyFormState) => {
+    const id = ++ultimaPeticion.current;
+    setLoading(true);
+    setErrorMsg(null);
+    try {
+      const res = await fetch('/api/predict', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(toApiPayload(state)),
+      });
+      const data = await res.json();
+      // Si mientras tanto se pidió otra predicción, esta respuesta vieja se descarta
+      if (id !== ultimaPeticion.current) return;
+      if (!res.ok) {
+        setErrorMsg(
+          Array.isArray(data.detalles) ? data.detalles.join(' ') : data.error || 'Error al calcular.'
+        );
+        return;
       }
+      const nuevo = data as PredictApiResponse;
+      setResult((prev) => {
+        const misma =
+          prev &&
+          norm(prev.zona.provincia) === norm(nuevo.zona.provincia) &&
+          norm(prev.zona.departamento) === norm(nuevo.zona.departamento) &&
+          prev.zona.sector === nuevo.zona.sector &&
+          prev.zona.ambito === nuevo.zona.ambito;
+        setCambio(misma && prev ? { antes: prev.prediccion.tasaEstimadaPct, ahora: nuevo.prediccion.tasaEstimadaPct } : null);
+        return nuevo;
+      });
+      setSimResult(null);
+    } catch {
+      setErrorMsg('No se pudo conectar con el servidor de predicción (/api/predict).');
+    } finally {
+      if (id === ultimaPeticion.current) setLoading(false);
+    }
+  };
+
+  // Predicción automática inicial + actualización reactiva con debounce suave cuando cambian los sliders
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      void callPredictApi(form);
     }, 180);
-    return () => { active = false; clearTimeout(timer); controller.abort(); };
-  }, [requestBody]);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form]);
 
   // Simulador "¿Qué pasa si intervenimos?" en vivo
   useEffect(() => {
     if (!result) return;
-    const controller = new AbortController();
-    let active = true;
     if (simSeguimientoPct === 0 && simTutoriasPct === 0 && simConectividadPct === 0) {
-      setCompletedSimulation(null);
+      setSimResult(null);
       return;
     }
 
@@ -190,7 +389,6 @@ export function SinglePageEvaluator({ specs, presets, provinces }: SinglePageEva
       try {
         const res = await fetch('/api/predict', {
           method: 'POST',
-          signal: controller.signal,
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             provincia: form.provincia,
@@ -200,15 +398,15 @@ export function SinglePageEvaluator({ specs, presets, provinces }: SinglePageEva
         });
         if (res.ok) {
           const data = (await res.json()) as PredictApiResponse;
-          if (active) setCompletedSimulation({ key: simulationKey, data });
+          setSimResult(data);
         }
       } catch {
         // Silencioso en debounce
       }
     }, 140);
 
-    return () => { active = false; clearTimeout(timer); controller.abort(); };
-  }, [simSeguimientoPct, simTutoriasPct, simConectividadPct, result, simulationKey, form.provincia, form.departamento]);
+    return () => clearTimeout(timer);
+  }, [simSeguimientoPct, simTutoriasPct, simConectividadPct, result, form.provincia, form.departamento]);
 
   const syncDraftStrings = (next: FriendlyFormState) => {
     setMatriculaText(String(next.matriculaAlumnos));
@@ -216,25 +414,58 @@ export function SinglePageEvaluator({ specs, presets, provinces }: SinglePageEva
     setAbCountText(String(next.abandonoPrevioAlumnos));
   };
 
-  const selectPreset = (preset: ZonePreset) => {
-    const next = presetToFriendlyState(preset);
-    setActivePresetId(preset.id);
+  const cargarZona = (z: ZonaCatalogo, presetId = 'catalogo') => {
+    const next = zonaToFriendlyState(z, specs);
+    setActivePresetId(presetId);
     setSimSeguimientoPct(0);
     setSimTutoriasPct(0);
     setSimConectividadPct(0);
+    setCambio(null);
+    setZonaBase(next);
     setForm(next);
     syncDraftStrings(next);
   };
 
-  const resetToCustom = () => {
-    const next = buildCustomState(specs, provinces);
-    setActivePresetId('custom');
-    setSimSeguimientoPct(0);
-    setSimTutoriasPct(0);
-    setSimConectividadPct(0);
-    setForm(next);
-    syncDraftStrings(next);
+  const selectPreset = (preset: ZonePreset) => {
+    const z = zonaDePreset(preset);
+    if (z) cargarZona(z, preset.id);
   };
+
+  const restaurarDatosReales = () => {
+    const z = zonas.find((x) => mismaZona(x, form.provincia, form.departamento, form.sector, form.ambito));
+    if (z) cargarZona(z, activePresetId);
+  };
+
+  // Zonas reales disponibles para lo elegido en el formulario
+  const departamentos = useMemo(
+    () =>
+      [...new Set(zonas.filter((z) => norm(z.provincia) === norm(form.provincia)).map((z) => z.departamento))].sort((a, b) =>
+        a.localeCompare(b, 'es')
+      ),
+    [zonas, form.provincia]
+  );
+  const zonasDelDepto = useMemo(
+    () => zonas.filter((z) => norm(z.provincia) === norm(form.provincia) && norm(z.departamento) === norm(form.departamento)),
+    [zonas, form.provincia, form.departamento]
+  );
+  const elegirZona = (prov: string, depto: string, sector: string, ambito: string) => {
+    const candidatas = zonas.filter((z) => norm(z.provincia) === norm(prov) && norm(z.departamento) === norm(depto));
+    const z =
+      candidatas.find((x) => x.sector === sector && x.ambito === ambito) ??
+      candidatas.find((x) => x.sector === sector) ??
+      candidatas.find((x) => x.ambito === ambito) ??
+      candidatas[0];
+    if (z) cargarZona(z);
+  };
+  const cambiarProvincia = (prov: string) => {
+    const deptos = [...new Set(zonas.filter((z) => norm(z.provincia) === norm(prov)).map((z) => z.departamento))].sort((a, b) =>
+      a.localeCompare(b, 'es')
+    );
+    if (deptos.length) elegirZona(prov, deptos[0], form.sector, form.ambito);
+  };
+
+  const modificados = camposModificados(form, zonaBase);
+  const zonaActual = zonas.find((z) => mismaZona(z, form.provincia, form.departamento, form.sector, form.ambito));
 
   const pred = result?.prediccion;
   const theme = getVisualRiskTheme(pred?.nivelRiesgo ?? 'bajo');
@@ -244,8 +475,6 @@ export function SinglePageEvaluator({ specs, presets, provinces }: SinglePageEva
     : alumnosEnRiesgo;
   const alumnosRetenidos = Math.max(0, alumnosEnRiesgo - simAlumnosEnRiesgo);
 
-  const activePresetObj = presets.find((p) => p.id === activePresetId);
-  const provincialReference = provinces.find((p) => p.provincia === form.provincia);
 
   return (
     <div className="space-y-6">
@@ -271,7 +500,7 @@ export function SinglePageEvaluator({ specs, presets, provinces }: SinglePageEva
         {/* Botones rápidos de ejemplos reales */}
         <div className="mt-5 border-t border-slate-100 pt-4">
           <p className="mb-2.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
-            Probar con un caso real de Argentina o cargar datos propios:
+            Probar con un caso real de Argentina (o elegí cualquier zona abajo):
           </p>
           <div className="flex flex-wrap gap-2">
             {presets.map((p) => {
@@ -291,25 +520,7 @@ export function SinglePageEvaluator({ specs, presets, provinces }: SinglePageEva
                 </button>
               );
             })}
-            <button
-              type="button"
-              onClick={resetToCustom}
-              className={`inline-flex items-center gap-1.5 rounded-lg border px-3.5 py-2 text-xs font-medium transition-colors ${
-                activePresetId === 'custom'
-                  ? 'border-[#1e3a5f] bg-[#1e3a5f] text-white font-semibold'
-                  : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
-              }`}
-            >
-              <RotateCcw className="h-3.5 w-3.5" />
-              Mis propios datos
-            </button>
           </div>
-          {activePresetId === 'custom' && (
-            <p className="mt-3 text-xs leading-relaxed text-slate-600">
-              Elegí la provincia para usar su referencia de abandono de 2022, o ingresá la tasa de tu zona.
-              Los demás valores iniciales son referencias de entrenamiento: ajustalos con tus propios datos.
-            </p>
-          )}
         </div>
       </section>
 
@@ -346,20 +557,12 @@ export function SinglePageEvaluator({ specs, presets, provinces }: SinglePageEva
                 <select
                   id="inp-prov"
                   value={form.provincia}
-                  onChange={(e) => {
-                    setActivePresetId('custom');
-                    const next = changeProvince(form, e.target.value, provinces);
-                    setForm(next);
-                    syncDraftStrings(next);
-                    setSimSeguimientoPct(0);
-                    setSimTutoriasPct(0);
-                    setSimConectividadPct(0);
-                  }}
+                  onChange={(e) => cambiarProvincia(e.target.value)}
                   className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-[#1e3a5f] focus:outline-none"
                 >
                   {provinces.map((prov) => (
-                    <option key={prov.provincia} value={prov.provincia}>
-                      {prov.provincia}
+                    <option key={prov} value={prov}>
+                      {prov}
                     </option>
                   ))}
                 </select>
@@ -368,17 +571,18 @@ export function SinglePageEvaluator({ specs, presets, provinces }: SinglePageEva
                 <label htmlFor="inp-depto" className="block text-xs font-semibold text-slate-700">
                   Departamento
                 </label>
-                <input
+                <select
                   id="inp-depto"
-                  type="text"
-                  value={form.departamento}
-                  onChange={(e) => {
-                    setActivePresetId('custom');
-                    setForm((s) => ({ ...s, departamento: e.target.value }));
-                  }}
-                  placeholder="Ej. Orán, La Matanza"
-                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-[#1e3a5f] focus:outline-none"
-                />
+                  value={departamentos.find((d) => norm(d) === norm(form.departamento)) ?? ''}
+                  onChange={(e) => elegirZona(form.provincia, e.target.value, form.sector, form.ambito)}
+                  className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-[#1e3a5f] focus:outline-none"
+                >
+                  {departamentos.map((d) => (
+                    <option key={d} value={d}>
+                      {d}
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
 
@@ -390,11 +594,10 @@ export function SinglePageEvaluator({ specs, presets, provinces }: SinglePageEva
                     <button
                       key={sec}
                       type="button"
-                      onClick={() => {
-                        setActivePresetId('custom');
-                        setForm((s) => ({ ...s, sector: sec }));
-                      }}
-                      className={`rounded-md py-1.5 text-xs font-medium transition-colors ${
+                      disabled={!zonasDelDepto.some((z) => z.sector === sec)}
+                      title={zonasDelDepto.some((z) => z.sector === sec) ? undefined : `No hay zonas de gestión ${sec.toLowerCase()} en este departamento`}
+                      onClick={() => elegirZona(form.provincia, form.departamento, sec, form.ambito)}
+                      className={`rounded-md py-1.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:text-slate-300 disabled:line-through ${
                         form.sector === sec
                           ? 'bg-white text-[#1e3a5f] shadow-xs font-semibold'
                           : 'text-slate-600'
@@ -413,11 +616,10 @@ export function SinglePageEvaluator({ specs, presets, provinces }: SinglePageEva
                     <button
                       key={amb}
                       type="button"
-                      onClick={() => {
-                        setActivePresetId('custom');
-                        setForm((s) => ({ ...s, ambito: amb }));
-                      }}
-                      className={`rounded-md py-1.5 text-xs font-medium transition-colors ${
+                      disabled={!zonasDelDepto.some((z) => z.sector === form.sector && z.ambito === amb)}
+                      title={zonasDelDepto.some((z) => z.sector === form.sector && z.ambito === amb) ? undefined : `No hay zonas ${form.sector.toLowerCase()} ${amb.toLowerCase()} en este departamento`}
+                      onClick={() => elegirZona(form.provincia, form.departamento, form.sector, amb)}
+                      className={`rounded-md py-1.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:text-slate-300 disabled:line-through ${
                         form.ambito === amb
                           ? 'bg-white text-[#1e3a5f] shadow-xs font-semibold'
                           : 'text-slate-600'
@@ -431,32 +633,38 @@ export function SinglePageEvaluator({ specs, presets, provinces }: SinglePageEva
 
               <div>
                 <span className="block text-xs font-semibold text-slate-700 mb-1">Conurbano GBA</span>
-                <div className="grid grid-cols-2 rounded-lg border border-slate-200 bg-slate-50 p-0.5">
-                  {[
-                    { val: false, label: 'No' },
-                    { val: true, label: 'Sí' },
-                  ].map((opt) => (
-                    <button
-                      key={opt.label}
-                      type="button"
-                      disabled={opt.val && form.provincia !== 'Buenos Aires'}
-                      onClick={() => {
-                        setActivePresetId('custom');
-                        setForm((s) => ({ ...s, esConurbano: opt.val }));
-                      }}
-                      className={`rounded-md py-1.5 text-xs font-medium transition-colors disabled:opacity-40 ${
-                        form.esConurbano === opt.val
-                          ? 'bg-white text-[#1e3a5f] shadow-xs font-semibold'
-                          : 'text-slate-600'
-                      }`}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
-                </div>
+                <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-700">
+                  {form.esConurbano ? 'Sí' : 'No'}
+                  <span className="font-normal text-slate-500"> · según el departamento</span>
+                </p>
               </div>
             </div>
           </section>
+
+          {modificados.length === 0 ? (
+            <div className="flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-900">
+              <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>
+                <strong>Zona real verificada.</strong> Los datos de abajo son los del Relevamiento Anual de esta zona.
+                Podés cambiarlos para simular otro escenario.
+              </span>
+            </div>
+          ) : (
+            <div className="flex items-start justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+              <span>
+                <strong>Modificaste {modificados.length} dato{modificados.length === 1 ? '' : 's'} de la zona.</strong> La predicción usa tus
+                valores; el resto sigue siendo el dato real.
+              </span>
+              <button
+                type="button"
+                onClick={restaurarDatosReales}
+                className="inline-flex shrink-0 items-center gap-1 rounded-md border border-amber-300 bg-white px-2 py-1 font-semibold text-amber-900 hover:bg-amber-100"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                Volver a los datos reales
+              </button>
+            </div>
+          )}
 
           {/* PASO 2: MATRÍCULA Y TRAYECTORIA (LO MÁS IMPORTANTE) */}
           <section className="space-y-4 border-t border-slate-200 pt-5">
@@ -500,7 +708,7 @@ export function SinglePageEvaluator({ specs, presets, provinces }: SinglePageEva
                               ...s,
                               matriculaAlumnos: val,
                               abandonoPrevioPct: nextPct,
-
+                              abandonoSecPrevioPct: Number(Math.min(100, nextPct * 1.65).toFixed(2)),
                             };
                           }
                           const nextCount = Math.round((val * s.abandonoPrevioPct) / 100);
@@ -527,38 +735,16 @@ export function SinglePageEvaluator({ specs, presets, provinces }: SinglePageEva
 
             {/* Abandono del año anterior (toggle % vs cantidad de alumnos) */}
             <div className="rounded-lg border border-slate-200 bg-slate-50/70 p-3.5 space-y-2.5">
-              <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-slate-700">
-                <label className="flex cursor-pointer items-center gap-2 font-semibold text-[#1e3a5f]">
-                  <input
-                    type="checkbox"
-                    checked={form.abandonoSource === 'provincial'}
-                    onChange={(e) => {
-                      const next = e.target.checked
-                        ? useProvinceHistory(form, provinces)
-                        : { ...form, abandonoSource: 'manual' as const };
-                      setActivePresetId('custom');
-                      setForm(next);
-                      syncDraftStrings(next);
-                    }}
-                  />
-                  Usar referencia provincial de 2022
-                </label>
-                <p className="mt-2" data-testid="history-source">
-                  {form.abandonoSource === 'provincial'
-                    ? `Referencia de ${form.provincia}: ${provincialReference?.ciclo2022Pct.toFixed(2).replace('.', ',')}%. Se actualiza al cambiar de provincia. Es un promedio provincial, no un dato observado de esta zona.`
-                    : 'Estás usando una tasa propia. Se conserva al cambiar de provincia; con las mismas variables, el modelo puede dar la misma estimación.'}
-                </p>
-              </div>
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <label htmlFor="inp-ab-prev" className="text-xs font-semibold text-slate-800">
-                  Abandono del ciclo anterior (2022)
+                  ¿Cuánto abandono hubo el año pasado?
                 </label>
                 <div className="flex items-center rounded-md border border-slate-200 bg-white p-0.5 text-[11px]">
                   <button
                     type="button"
                     onClick={() => {
-                      setAbPctText(String(effectiveAbandonoPrevioPct));
-                      setForm((s) => ({ ...s, abandonoInputMode: 'pct', abandonoPrevioPct: effectiveAbandonoPrevioPct }));
+                      setAbPctText(String(form.abandonoPrevioPct));
+                      setForm((s) => ({ ...s, abandonoInputMode: 'pct' }));
                     }}
                     className={`rounded px-2 py-1 font-medium ${
                       form.abandonoInputMode === 'pct'
@@ -572,7 +758,7 @@ export function SinglePageEvaluator({ specs, presets, provinces }: SinglePageEva
                     type="button"
                     onClick={() => {
                       setAbCountText(String(form.abandonoPrevioAlumnos));
-                      setForm((s) => ({ ...s, abandonoInputMode: 'count', abandonoSource: 'manual' }));
+                      setForm((s) => ({ ...s, abandonoInputMode: 'count' }));
                     }}
                     className={`rounded px-2 py-1 font-medium ${
                       form.abandonoInputMode === 'count'
@@ -602,10 +788,9 @@ export function SinglePageEvaluator({ specs, presets, provinces }: SinglePageEva
                       setAbCountText(String(cnt));
                       setForm((s) => ({
                         ...s,
-                        abandonoSource: 'manual',
                         abandonoPrevioPct: pct,
                         abandonoPrevioAlumnos: cnt,
-
+                        abandonoSecPrevioPct: Number(Math.min(100, pct * 1.65).toFixed(2)),
                       }));
                     }}
                     className="flex-1 accent-[#c53030]"
@@ -629,10 +814,9 @@ export function SinglePageEvaluator({ specs, presets, provinces }: SinglePageEva
                           setActivePresetId('custom');
                           setForm((s) => ({
                             ...s,
-                            abandonoSource: 'manual',
-                        abandonoPrevioPct: pct,
+                            abandonoPrevioPct: pct,
                             abandonoPrevioAlumnos: cnt,
-
+                            abandonoSecPrevioPct: Number(Math.min(100, pct * 1.65).toFixed(2)),
                           }));
                         }
                       }}
@@ -670,9 +854,8 @@ export function SinglePageEvaluator({ specs, presets, provinces }: SinglePageEva
                           setForm((s) => ({
                             ...s,
                             abandonoPrevioAlumnos: cnt,
-                            abandonoSource: 'manual',
-                        abandonoPrevioPct: pct,
-
+                            abandonoPrevioPct: pct,
+                            abandonoSecPrevioPct: Number(Math.min(100, pct * 1.65).toFixed(2)),
                           }));
                         }
                       }}
@@ -875,8 +1058,7 @@ export function SinglePageEvaluator({ specs, presets, provinces }: SinglePageEva
         </div>
 
         {/* DERECHA: DIAGNÓSTICO CLARO Y SIMULADOR ACCIONABLE */}
-        <div className="space-y-5 lg:col-span-6" aria-busy={loading}>
-          {loading && <div role="status" className="rounded-xl border border-blue-200 bg-blue-50 p-6 text-sm text-blue-900">Calculando la estimación para {form.provincia}…</div>}
+        <div className="space-y-5 lg:col-span-6">
           {pred && result && (
             <>
               {/* Tarjeta principal semáforo */}
@@ -899,9 +1081,25 @@ export function SinglePageEvaluator({ specs, presets, provinces }: SinglePageEva
                     <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">
                       Tasa estimada de abandono
                     </p>
-                    <p data-testid="estimated-rate" className={`mt-1 font-mono text-4xl font-bold tabular-nums ${theme.number}`}>
+                    <p className={`mt-1 font-mono text-4xl font-bold tabular-nums ${theme.number}`}>
                       {pred.tasaEstimadaPct.toFixed(2).replace('.', ',')}%
                     </p>
+                    {cambio && !loading && (
+                      <p className="mt-1 text-xs text-slate-600">
+                        {Math.abs(cambio.ahora - cambio.antes) < 0.005 ? (
+                          <>
+                            Sin cambios con el último ajuste: el modelo agrupa zonas parecidas y ese dato no alcanzó para
+                            cambiar de grupo.
+                          </>
+                        ) : (
+                          <>
+                            {cambio.ahora > cambio.antes ? 'Subió' : 'Bajó'} de{' '}
+                            <strong className="font-mono">{cambio.antes.toFixed(2).replace('.', ',')}%</strong> a{' '}
+                            <strong className="font-mono">{cambio.ahora.toFixed(2).replace('.', ',')}%</strong> con el último ajuste.
+                          </>
+                        )}
+                      </p>
+                    )}
                   </div>
 
                   <div className="rounded-lg border border-slate-200/80 bg-white/85 p-3.5">
@@ -920,16 +1118,6 @@ export function SinglePageEvaluator({ specs, presets, provinces }: SinglePageEva
                 </div>
 
                 <p className="mt-4 text-sm leading-relaxed text-slate-700">{theme.summary}</p>
-                {pred.referenciaProvincial && (
-                  <p className="mt-3 rounded-lg border border-blue-200 bg-white/90 p-3 text-xs text-slate-700">
-                    Para calcular esta estimación se usó el abandono provincial de 2022 de {pred.referenciaProvincial.provincia}: {' '}
-                    <strong>{pred.referenciaProvincial.tasaPct.toFixed(2).replace('.', ',')}%</strong>.
-                    La predicción corresponde a una zona con los datos del formulario, no al promedio de toda la provincia.
-                  </p>
-                )}
-                {pred.advertenciasEntrada.filter((warning) => !warning.startsWith('Se usó la referencia provincial')).map((warning) => (
-                  <p key={warning} className="mt-2 text-xs text-amber-900">{warning}</p>
-                ))}
 
                 {/* Comparación visual simple contra el país */}
                 <div className="mt-4 space-y-1.5">
@@ -958,12 +1146,13 @@ export function SinglePageEvaluator({ specs, presets, provinces }: SinglePageEva
                   </div>
                 </div>
 
-                {activePresetObj?.tasaRealReferenciaPct !== undefined && (
+                {zonaActual && (
                   <p className="mt-3 text-xs text-slate-700">
-                    Referencia histórica real (2023):{' '}
-                    <strong className="font-mono">
-                      {activePresetObj.tasaRealReferenciaPct.toFixed(2).replace('.', ',')}%
-                    </strong>
+                    Tasa real de esta zona (ciclo 2023):{' '}
+                    <strong className="font-mono">{zonaActual.tasaRealPct.toFixed(2).replace('.', ',')}%</strong>
+                    {modificados.length > 0 && (
+                      <span className="text-slate-500"> · corresponde a los datos originales, no a los que modificaste</span>
+                    )}
                   </p>
                 )}
 

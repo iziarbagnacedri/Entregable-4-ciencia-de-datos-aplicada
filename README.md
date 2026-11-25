@@ -23,14 +23,15 @@ npx tsx --test src/ml/model.test.ts
 
 | Carpeta | Qué hay |
 |---|---|
-| `src/ml/random_forest.json` | El modelo entrenado en la Entrega 3, exportado desde `modelo_abandono.joblib` |
+| `src/ml/randomForestData.ts` | El modelo entrenado en la Entrega 3, exportado desde `modelo_abandono.joblib` |
+| `src/ml/zonas.ts` · `zonasData.ts` | Catálogo de las 1.136 zonas reales y validación de zonas |
 | `src/ml/realForest.ts` | Lógica del modelo: imputación (mediana + indicador de faltante) y los 400 árboles |
 | `src/ml/schema.ts` | Variables de entrada, validación y preprocesamiento |
 | `src/ml/model.ts` | Predicción de una zona o de un lote, ranking nacional y explicación por variable |
 | `src/server/handlers.ts` | Capa de servicio (API): valida el pedido, llama al modelo y maneja errores |
 | `api/` | Las mismas rutas como funciones de Vercel |
 | `src/components/` | Interfaz web (React) |
-| `scripts/exportar_modelo.py` | Regenera `random_forest.json` a partir del `.joblib` |
+| `scripts/exportar_modelo.py` | Regenera `randomForestData.ts` y `zonasData.ts` a partir del `.joblib` y los CSV |
 
 ## API
 
@@ -39,6 +40,7 @@ npx tsx --test src/ml/model.test.ts
 | GET | `/api/health` | Estado del servicio y datos del modelo cargado |
 | GET | `/api/model/metadata` | Variables, métricas y resultados del notebook |
 | GET | `/api/zones` | Datos por provincia y zonas priorizadas |
+| GET | `/api/catalogo` | Las 1.136 zonas reales (provincia, departamento, sector, ámbito) con sus datos |
 | POST | `/api/predict` | Predice una zona |
 | POST | `/api/predict/batch` | Predice varias zonas (`{ "rows": [...] }` o `{ "csv": "..." }`) y las ordena por riesgo |
 
@@ -46,10 +48,16 @@ Ejemplo:
 
 ```bash
 curl -X POST http://localhost:3000/api/predict -H "Content-Type: application/json" \
-  -d '{"sector":"Estatal","ambito":"Rural","matricula_inicial":5250,"tasa_abandono_2022":4.19,"pct_sobreedad_2023":0.39,"pct_repitentes_2023":0.135}'
+  -d '{"provincia":"Formosa","departamento":"Ramón Lista","sector":"Estatal","ambito":"Rural"}'
+
+# misma zona, simulando menos abandono el año anterior
+curl -X POST http://localhost:3000/api/predict -H "Content-Type: application/json" \
+  -d '{"provincia":"Formosa","departamento":"Ramón Lista","sector":"Estatal","ambito":"Rural","tasa_abandono_2022":1}'
 ```
 
-Las variables que no se envían se completan con la mediana de entrenamiento, igual que el `SimpleImputer` del notebook. Si un dato es inválido (por ejemplo, texto donde va un número o una proporción mayor a 1), la API responde `400` con el detalle del error.
+**La zona tiene que existir.** Toda predicción necesita `provincia`, `departamento`, `sector` y `ambito`, y la API valida que esa combinación esté entre las 1.136 zonas reales (no distingue mayúsculas ni tildes). Si no existe, responde `400` explicando qué falla: el departamento no está en esa provincia, o esa zona no tiene esa gestión o ese ámbito (y lista las opciones).
+
+Las variables que no se envían se completan con los **datos reales de esa zona**; las que se envían reemplazan al dato real (sirve para simular escenarios). Si la zona no tiene un dato, el modelo lo imputa con la mediana de entrenamiento, igual que el `SimpleImputer` del notebook. Si un dato es inválido (por ejemplo, texto donde va un número o una proporción mayor a 1), la API responde `400` con el detalle del error.
 
 Salida principal: `tasaEstimadaPct` (tasa estimada en %), `altoRiesgoUmbralFijo` (si supera 1,39%, el P75 de entrenamiento), `percentilNacional` (posición frente a las predicciones de las 1.136 zonas reales) y `contribuciones` (cuánto cambia la estimación si cada variable estuviera en la mediana).
 
