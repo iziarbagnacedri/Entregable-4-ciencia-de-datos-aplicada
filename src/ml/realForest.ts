@@ -1,12 +1,12 @@
 /**
- * Random Forest REAL de la Entrega 3, cargado desde `random_forest.json`.
+ * Random Forest REAL de la Entrega 3, cargado desde `randomForestData.ts`.
  *
  * Ese archivo se generó a partir de `modelo_abandono.joblib` (Pipeline de scikit-learn:
  * SimpleImputer(median, add_indicator=True) + RandomForestRegressor de 400 árboles) con
  * `scripts/exportar_modelo.py`. No se reentrena nada: son los mismos árboles, umbrales y
  * valores de hoja que guardó el notebook, así que las predicciones coinciden con Python.
  */
-import modelo from './random_forest.json';
+import modelo from './randomForestData.ts';
 import { FEATURE_KEYS } from './schema.ts';
 
 interface ExportedTree {
@@ -39,7 +39,7 @@ const MODEL = modelo as unknown as ExportedModel;
 // mismo que FEATURE_KEYS en schema.ts. Este índice traduce de un orden al otro, por nombre.
 const ORDEN_MODELO = MODEL.variables.map((v) => FEATURE_KEYS.indexOf(v as (typeof FEATURE_KEYS)[number]));
 if (ORDEN_MODELO.some((i) => i < 0) || MODEL.variables.length !== FEATURE_KEYS.length) {
-  throw new Error('random_forest.json no tiene las mismas 20 variables que FEATURE_KEYS.');
+  throw new Error('randomForestData.ts no tiene las mismas 20 variables que FEATURE_KEYS.');
 }
 
 /** Paso 1 del Pipeline: imputar con la mediana de entrenamiento y agregar indicadores de faltante. */
