@@ -48,10 +48,6 @@ export default function App() {
     };
   }, []);
 
-  const provinceNames = zonesData
-    ? zonesData.provinces.map((p) => p.provincia).sort((a, b) => a.localeCompare(b, 'es'))
-    : ['Buenos Aires', 'Formosa', 'La Rioja', 'Salta', 'San Luis'];
-
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
       {/* Barra superior minimalista y enfocada */}
@@ -124,7 +120,7 @@ export default function App() {
           <SinglePageEvaluator
             specs={metadata.variables}
             presets={zonesData.presets}
-            provinces={provinceNames}
+            provinces={[...zonesData.provinces].sort((a, b) => a.provincia.localeCompare(b.provincia, 'es'))}
           />
         )}
       </main>
